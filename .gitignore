@@ -1,1 +1,6 @@
 data/raw/
+.ipynb_checkpoints/
+codes/.DS_Store
+codes/.ipynb_checkpoints
+submissions/.ipynb_checkpoints
+.DS_Store
