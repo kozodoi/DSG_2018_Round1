@@ -7,3 +7,4 @@ submissions/.ipynb_checkpoints
 .DS_Store
 codes/functions/__pycache__/
 submissions/cv_validations/
+submissions/cv_validations/*
