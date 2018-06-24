@@ -12,7 +12,12 @@ if (require(pacman) == F) install.packages("pacman")
 library(pacman)
 
 # libraries
-p_load(beepr, AUC, compiler)
+p_load(beepr, AUC, compiler, data.table)
+
+# working directory
+cd <- dirname(rstudioapi::getActiveDocumentContext()$path)
+setwd(dirname(cd))
+
 
 
 ###################################
@@ -91,27 +96,40 @@ BES <- cmpfun(function(X, Y, bags = 10L, p = 0.5, iter = 100L, display = T){
 ###################################
 
 # load valid data
-valid <- read.csv2(file.path("../pred_valid", file.list[1]), sep = ",", dec = ".", header = T)
-valid <- valid[order(c(valid$CustomerIdx, valid$IsinIdx, valid$BuySell, valid$Week)), ]
-valid <- valid[, c("CustomerIdx", "IsinIdx", "BuySell", "Week", "CustomerInterest")]
+valid <- fread(file.path("data", "validation.csv"), sep = ",", dec = ".", header = T)
+valid <- valid[order(CustomerIdx, IsinIdx, BuySell), ]
+valid <- valid[, c("CustomerIdx", "IsinIdx", "BuySell", "CustomerInterest")]
 
-# load all predictions
-file.list <- list.files("../pred_valid")
+# load all predictions [1]
+file.list1 <- list.files("pred_valid_under/")
 preds <- list()
-for (i in 1:length(file.list)) {
-  print(file.path("Loading ", file.list[i]))
-  data       <- read.csv2(file.path("../pred_valid", file.list[i]), sep = ",", dec = ".", header = T)
-  preds[[i]] <- data[order(c(data$CustomerIdx, data$IsinIdx, data$BuySell, data$Week)), ]
+for (i in 1:length(file.list1)) {
+  print(file.path("Loading ", file.list1[i]))
+  data       <- fread(file.path("pred_valid_under", file.list1[i]), sep = ",", dec = ".", header = T)
+  preds[[i]] <- data[order(CustomerIdx, IsinIdx, BuySell), ]
+}
+
+# load all predictions [2]
+k <- length(preds)
+file.list2 <- list.files("pred_valid/")
+for (i in (k + 1):(k + length(file.list2))) {
+  print(file.path("Loading ", file.list2[(i - k)]))
+  data <- fread(file.path("pred_valid", file.list2[(i - k)]), sep = ",", dec = ".", header = T)
+  preds[[i]] <- data[order(CustomerIdx, IsinIdx, BuySell), ]
 }
 
 # create prediction matrix
-pred.matrix <- data.frame(CustomerIdx = valid$CustomerIdx)
+file.list <- c(file.list1, file.list2)
+pred.matrix <- data.frame(CustomerIdx = valid$CustomerIdx, IsinIdx = valid$IsinIdx,
+                          BuySell = valid$BuySell)
 for (i in 1:length(file.list)) {
-  pred.matrix <- cbind(pred.matrix, preds[[i]]$TARGET)
+  pred.matrix <- merge(x = pred.matrix, by = c("CustomerIdx", "IsinIdx", "BuySell"), all.y = F,
+                       y = preds[[i]][, c("CustomerIdx", "IsinIdx", "BuySell", "TARGET")])
 }
 
 # assign colnames
-pred.matrix <- pred.matrix[, 2:ncol(pred.matrix)]
+pred.matrix <- pred.matrix[order(pred.matrix$CustomerIdx, pred.matrix$IsinIdx, pred.matrix$BuySell), ]
+pred.matrix <- pred.matrix[, 4:ncol(pred.matrix)]
 colnames(pred.matrix) <- file.list
 
 # extract real values
@@ -128,7 +146,7 @@ real <- as.factor(valid$CustomerInterest)
 ######## REMOVE CORRELATED PREDICTIONS
 
 # set correlation threshold
-threshold <- 0.99
+threshold <- 0.999
 
 # computing correlations
 cors <- cor(pred.matrix)
@@ -171,12 +189,13 @@ pred.matrix <- pred.matrix[, !(colnames(pred.matrix) %in% unique(bad))]
 
 # save the list of models
 good.models <- colnames(pred.matrix)
+print(length(good.models))
 
 
 ######## REMOVE WEAK PREDICTIONS
 
 # set AUC threshold
-threshold <- 0.8
+threshold <- 0.7
 
 # drop weak classifiers
 aucs <- apply(pred.matrix, 2, function(x) auc(roc(x, real)))
@@ -185,6 +204,7 @@ pred.matrix <- pred.matrix[, colnames(pred.matrix) %in% good]
 
 # savethe list of models
 good.models <- colnames(pred.matrix)
+print(length(good.models))
 
 
 
@@ -216,12 +236,13 @@ names(es.weights) <- colnames(pred.matrix)[1:length(es.weights)]
 pred.matrix$es <- apply(pred.matrix[,1:k], 1, function(x) sum(x*es.weights))
 
 # bagged ensemble selection
-bes.weights <- BES(X = pred.matrix[,1:k], Y = real, iter = 100, bags = 10, p = 0.5)
-pred.matrix$bag_es <- apply(pred.matrix[,1:k], 1, function(x) sum(x*bes.weights))
+#bes.weights <- BES(X = pred.matrix[,1:k], Y = real, iter = 50, bags = 5, p = 0.5)
+#pred.matrix$bag_es <- apply(pred.matrix[,1:k], 1, function(x) sum(x*bes.weights))
 
 # computing AUC
 aucs <- apply(pred.matrix, 2, function(x) auc(roc(x, real)))
-aucs
+aucs <- sort(aucs, decreasing = T)
+aucs[1:10]
 
 
 
@@ -233,15 +254,19 @@ aucs
 
 ######## PREPARATIONS
 
+# list files
+file.list <- list.files("submissions/")
+
 # load test data
-test <- read.csv2("../submissions/naive.csv", sep = ",", dec = ".", header = T)
-test <- test[order(test$PredictionIdx), ]
+test <- fread(file.path("submissions/", file.list[1]), sep = ",", dec = ".", header = T)
+test <- test[order(PredictionIdx), ]
 
 # load all predictions
 for (i in 1:length(good.models)) {
   print(file.path("Loading ", good.models[i]))
-  data <- read.csv2(file.path("../submissions", good.models[i]), sep = ",", dec = ".", header = T)
-  preds[[i]] <- data[order(data$PredictionIdx), ]
+  data <- fread(file.path("submissions", gsub(".csv", "_2stage.csv", good.models[i])), 
+                          sep = ",", dec = ".", header = T)
+  preds[[i]] <- data[order(PredictionIdx), ]
 }
 
 # create prediction matrix
@@ -273,18 +298,23 @@ pred.matrix$top10 <- apply(pred.matrix[, top10], 1, mean)
 pred.matrix$es <- apply(pred.matrix[, 1:k], 1, function(x) sum(x*es.weights))
 
 # bagged ensemble selection
-pred.matrix$bes <- apply(pred.matrix[, 1:k], 1, function(x) sum(x*bes.weights))
+#pred.matrix$bes <- apply(pred.matrix[, 1:k], 1, function(x) sum(x*bes.weights))
 
 
 ######## EXPORT
 
 # best method
-method <- "es"
+method = names(aucs)[1]
+print(method)
 
 # computing correlation with the best submission
-best.sub <- read.csv(paste0("./submissions/rankmean_4_submits.csv"))$CustomerInterest
-cor(pred.matrix[[method]], best.sub)
+best.sub <- fread("submissions/rankmean_two_models_new.csv")
+best.sub <- best.sub[order(PredictionIdx), ]
+cor(pred.matrix[[method]], best.sub$CustomerInterest, method = "spearman")
 
-# exporting submissions
-submit(pred.matrix[[method]], data = data.unknown, folder = subm.folder, 
-       file = paste0("auc", aucs[method], "_ensemble_", method, ".csv"))
+# exporting submission
+submit <- best.sub
+submit$CustomerInterest <- pred.matrix[[method]]
+fwrite(submit, file = file.path("submissions", 
+                                paste0("auc",  substr(aucs[method], start = 3, stop = 8), 
+                                "_ensemble_", method, ".csv")))
