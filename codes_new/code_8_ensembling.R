@@ -96,32 +96,22 @@ BES <- cmpfun(function(X, Y, bags = 10L, p = 0.5, iter = 100L, display = T){
 ###################################
 
 # load valid data
-valid <- fread(file.path("data", "validation.csv"), sep = ",", dec = ".", header = T)
+valid <- fread(file.path("pred_valid", "auc850085_data_v4_0_60_under_wlp_lm_bm_lgb.csv"), sep = ",", dec = ".", header = T)
 valid <- valid[order(CustomerIdx, IsinIdx, BuySell), ]
 valid <- valid[, c("CustomerIdx", "IsinIdx", "BuySell", "CustomerInterest")]
 
-# load all predictions [1]
-file.list1 <- list.files("pred_valid_under/")
+# load all predictions 
+file.list <- list.files("pred_valid/")
 preds <- list()
-for (i in 1:length(file.list1)) {
-  print(file.path("Loading ", file.list1[i]))
-  data       <- fread(file.path("pred_valid_under", file.list1[i]), sep = ",", dec = ".", header = T)
-  preds[[i]] <- data[order(CustomerIdx, IsinIdx, BuySell), ]
-}
-
-# load all predictions [2]
-k <- length(preds)
-file.list2 <- list.files("pred_valid/")
-for (i in (k + 1):(k + length(file.list2))) {
-  print(file.path("Loading ", file.list2[(i - k)]))
-  data <- fread(file.path("pred_valid", file.list2[(i - k)]), sep = ",", dec = ".", header = T)
+for (i in 1:length(file.list)) {
+  print(file.path("Loading ", file.list[i]))
+  data       <- fread(file.path("pred_valid", file.list[i]), sep = ",", dec = ".", header = T)
   preds[[i]] <- data[order(CustomerIdx, IsinIdx, BuySell), ]
 }
 
 # create prediction matrix
-file.list <- c(file.list1, file.list2)
-pred.matrix <- data.frame(CustomerIdx = valid$CustomerIdx, IsinIdx = valid$IsinIdx,
-                          BuySell = valid$BuySell)
+pred.matrix <- data.frame(CustomerIdx = valid$CustomerIdx, IsinIdx = valid$IsinIdx, BuySell = valid$BuySell)
+
 for (i in 1:length(file.list)) {
   pred.matrix <- merge(x = pred.matrix, by = c("CustomerIdx", "IsinIdx", "BuySell"), all.y = F,
                        y = preds[[i]][, c("CustomerIdx", "IsinIdx", "BuySell", "TARGET")])
@@ -195,7 +185,7 @@ print(length(good.models))
 ######## REMOVE WEAK PREDICTIONS
 
 # set AUC threshold
-threshold <- 0.7
+threshold <- 0.6
 
 # drop weak classifiers
 aucs <- apply(pred.matrix, 2, function(x) auc(roc(x, real)))
@@ -208,11 +198,134 @@ print(length(good.models))
 
 
 
+######## REMOVE "WRONG" PREDICTIONS
+
+# # save the list of models
+# good.models <- colnames(pred.matrix)
+# print(length(good.models))
+# 
+# # set correlation difference threshold
+# threshold <- 0.01
+# 
+# # list files
+# file.list <- list.files("submissions/")
+# 
+# # load test data
+# test <- fread(file.path("submissions/", file.list[1]), sep = ",", dec = ".", header = T)
+# test <- test[order(PredictionIdx), ]
+# 
+# # load all predictions
+# for (i in 1:length(good.models)) {
+#   print(file.path("Loading ", good.models[i]))
+#   data <- fread(file.path("submissions", gsub(".csv", "_2stage.csv", good.models[i])), 
+#                 sep = ",", dec = ".", header = T)
+#   preds[[i]] <- data[order(PredictionIdx), ]
+# }
+# 
+# # create prediction matrix
+# test.matrix <- data.frame(PredictionIdx = test$PredictionIdx)
+# for (i in 1:length(good.models)) {
+#   test.matrix <- cbind(test.matrix, preds[[i]]$CustomerInterest)
+# }
+# 
+# # assign colnames
+# test.matrix <- test.matrix[, 2:ncol(test.matrix)]
+# colnames(test.matrix) <- gsub(".csv", "_2stage.csv", good.models)
+# 
+# # computing correlations
+# cors.valid <- cor(pred.matrix)
+# cors.test  <- cor(test.matrix)
+# 
+# # # remove "wrong" models [1]
+# # goods <- cors.test["auc8465_data_v4wlp_0_60_under_lgb_2stage.csv", ]
+# # goods <- goods[goods >= threshold]
+# # good.models <- gsub("_2stage.csv", ".csv", names(goods))
+# # pred.matrix <- pred.matrix[, (colnames(pred.matrix) %in% good.models)]
+# 
+# # remove "wrong" models [2]
+# goods <- abs(cors.valid[, "auc8465_data_v4wlp_0_60_under_lgb.csv"] - cors.test[, "auc8465_data_v4wlp_0_60_under_lgb_2stage.csv"])
+# goods <- goods[goods < threshold]
+# good.models <- names(goods)
+# pred.matrix <- pred.matrix[, (colnames(pred.matrix) %in% good.models)]
+# 
+# # save the list of models
+# good.models <- colnames(pred.matrix)
+# print(length(good.models))
+# 
+# # # convert to ranks
+# # for (i in 1:ncol(pred.matrix)) {
+# #   pred.matrix[, i] <- rank(pred.matrix[, i])
+# # }
+
+
+
 ###################################
 #                                 #
 #            ENSEMBLING           #
 #                                 #
 ###################################
+
+# # train-valid split
+# idx <- sample(1:nrow(pred.matrix))[1:30000]
+# train <- pred.matrix[ idx, ]
+# valid <- pred.matrix[-idx, ]
+# 
+# 
+# ##### TRAINING ENSEMBLES
+# 
+# # extract number of models
+# k <- ncol(train)
+# 
+# # mean and median predictions
+# train$mean   <- apply(train[,1:k], 1, mean)
+# train$median <- apply(train[,1:k], 1, median)
+# 
+# # TOP-N mean ensembles
+# aucs  <- apply(train, 2, function(x) auc(roc(x, real[idx])))
+# top3  <- names(aucs)[order(aucs, decreasing = T)[1:3]]
+# top5  <- names(aucs)[order(aucs, decreasing = T)[1:5]]
+# #top10 <- names(aucs)[order(aucs, decreasing = T)[1:10]]
+# train$top3  <- apply(train[, top3],  1, mean)
+# train$top5  <- apply(train[, top5],  1, mean)
+# #train$top10 <- apply(train[, top10], 1, mean)
+# 
+# # ensemble selection
+# #es.weights <- ES(X = train[,1:k], Y = real[idx], iter = 25)
+# #names(es.weights) <- colnames(train)[1:length(es.weights)]
+# #train$es <- apply(train[,1:k], 1, function(x) sum(x*es.weights))
+# 
+# # bagged ensemble selection
+# bes.weights <- BES(X = train[,1:k], Y = real[idx], iter = 25, bags = 10, p = 0.5)
+# train$bag_es <- apply(train[,1:k], 1, function(x) sum(x*bes.weights))
+# 
+# 
+# ##### VALIDATING ENSEMBLES
+# 
+# # mean and median predictions
+# valid$mean   <- apply(valid[, 1:k], 1, mean)
+# valid$median <- apply(valid[, 1:k], 1, median)
+# 
+# # TOP-N mean ensembles
+# valid$top3  <- apply(valid[, top3],  1, mean)
+# valid$top5  <- apply(valid[, top5],  1, mean)
+# #valid$top10 <- apply(valid[, top10], 1, mean)
+# 
+# # ensemble selection
+# #valid$es <- apply(valid[, 1:k], 1, function(x) sum(x*es.weights))
+# 
+# # bagged ensemble selection
+# pred.matrix$bes <- apply(pred.matrix[, 1:k], 1, function(x) sum(x*bes.weights))
+# 
+# # computing AUC
+# aucs <- apply(valid, 2, function(x) auc(roc(x, real[-idx])))
+# aucs <- sort(aucs, decreasing = T)
+# 
+# # display info
+# aucs[1:10]
+# es.weights[es.weights > 0]
+
+
+##### RETRAINING ENSEMBLES
 
 # extract number of models
 k <- ncol(pred.matrix)
@@ -225,24 +338,28 @@ pred.matrix$median <- apply(pred.matrix[,1:k], 1, median)
 aucs  <- apply(pred.matrix, 2, function(x) auc(roc(x, real)))
 top3  <- names(aucs)[order(aucs, decreasing = T)[1:3]]
 top5  <- names(aucs)[order(aucs, decreasing = T)[1:5]]
-top10 <- names(aucs)[order(aucs, decreasing = T)[1:10]]
+#top10 <- names(aucs)[order(aucs, decreasing = T)[1:10]]
 pred.matrix$top3  <- apply(pred.matrix[, top3],  1, mean)
 pred.matrix$top5  <- apply(pred.matrix[, top5],  1, mean)
-pred.matrix$top10 <- apply(pred.matrix[, top10], 1, mean)
+#pred.matrix$top10 <- apply(pred.matrix[, top10], 1, mean)
 
 # ensemble selection
-es.weights <- ES(X = pred.matrix[,1:k], Y = real, iter = 100)
-names(es.weights) <- colnames(pred.matrix)[1:length(es.weights)]
-pred.matrix$es <- apply(pred.matrix[,1:k], 1, function(x) sum(x*es.weights))
+#es.weights <- ES(X = pred.matrix[,1:k], Y = real, iter = 100)
+#names(es.weights) <- colnames(pred.matrix)[1:length(es.weights)]
+#pred.matrix$es <- apply(pred.matrix[,1:k], 1, function(x) sum(x*es.weights))
 
 # bagged ensemble selection
-#bes.weights <- BES(X = pred.matrix[,1:k], Y = real, iter = 50, bags = 5, p = 0.5)
-#pred.matrix$bag_es <- apply(pred.matrix[,1:k], 1, function(x) sum(x*bes.weights))
+bes.weights <- BES(X = pred.matrix[,1:k], Y = real, iter = 20, bags = 10, p = 0.72)
+names(bes.weights) <- colnames(pred.matrix)[1:length(bes.weights)]
+pred.matrix$bag_es <- apply(pred.matrix[,1:k], 1, function(x) sum(x*bes.weights))
 
 # computing AUC
 aucs <- apply(pred.matrix, 2, function(x) auc(roc(x, real)))
 aucs <- sort(aucs, decreasing = T)
+
+# display info
 aucs[1:10]
+bes.weights[bes.weights > 0]
 
 
 
@@ -262,17 +379,18 @@ test <- fread(file.path("submissions/", file.list[1]), sep = ",", dec = ".", hea
 test <- test[order(PredictionIdx), ]
 
 # load all predictions
+test.preds <- list()
 for (i in 1:length(good.models)) {
   print(file.path("Loading ", good.models[i]))
   data <- fread(file.path("submissions", gsub(".csv", "_2stage.csv", good.models[i])), 
                           sep = ",", dec = ".", header = T)
-  preds[[i]] <- data[order(PredictionIdx), ]
+  test.preds[[i]] <- data[order(PredictionIdx), ]
 }
 
 # create prediction matrix
 pred.matrix <- data.frame(PredictionIdx = test$PredictionIdx)
 for (i in 1:length(good.models)) {
-  pred.matrix <- cbind(pred.matrix, preds[[i]]$CustomerInterest)
+  pred.matrix <- cbind(pred.matrix, test.preds[[i]]$CustomerInterest)
 }
 
 # assign colnames
@@ -292,23 +410,24 @@ pred.matrix$median <- apply(pred.matrix[, 1:k], 1, median)
 # TOP-N mean ensembles
 pred.matrix$top3  <- apply(pred.matrix[, top3],  1, mean)
 pred.matrix$top5  <- apply(pred.matrix[, top5],  1, mean)
-pred.matrix$top10 <- apply(pred.matrix[, top10], 1, mean)
+#pred.matrix$top10 <- apply(pred.matrix[, top10], 1, mean)
 
 # ensemble selection
-pred.matrix$es <- apply(pred.matrix[, 1:k], 1, function(x) sum(x*es.weights))
+#pred.matrix$es <- apply(pred.matrix[, 1:k], 1, function(x) sum(x*es.weights))
 
 # bagged ensemble selection
-#pred.matrix$bes <- apply(pred.matrix[, 1:k], 1, function(x) sum(x*bes.weights))
+pred.matrix$bes <- apply(pred.matrix[, 1:k], 1, function(x) sum(x*bes.weights))
 
 
 ######## EXPORT
 
 # best method
-method = names(aucs)[1]
+method = "bes"
+print(aucs[1:10])
 print(method)
 
 # computing correlation with the best submission
-best.sub <- fread("submissions/rankmean_two_models_new.csv")
+best.sub <- fread("submissions/auc852931_ensemble_es.csv")
 best.sub <- best.sub[order(PredictionIdx), ]
 cor(pred.matrix[[method]], best.sub$CustomerInterest, method = "spearman")
 
